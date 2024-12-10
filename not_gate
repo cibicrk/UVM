@@ -1,3 +1,245 @@
+//Design
+
 module notg(input in,output out);
   assign out=~in;
 endmodule
+
+/-------------------------------------------------------------------------------------------------/
+
+UVM methodology
+//*seq item
+class seq_item extends uvm_sequence_item;
+  rand bit in;
+  bit out;
+  function new(string name="seq_item");
+    super.new(name);
+  endfunction
+  `uvm_object_utils_begin(seq_item)
+  `uvm_field_int(in,UVM_ALL_ON)
+  `uvm_field_int(out,UVM_ALL_ON)
+  `uvm_object_utils_end
+endclass
+
+//*base sequence
+class base_seq extends uvm_sequence#(seq_item);
+  seq_item req1;  // Declare the sequence item (req1)
+  `uvm_object_utils(base_seq)
+  function new(string name = "seq");
+    super.new(name);
+  endfunction
+  task body();
+    `uvm_info(get_type_name(), "base seq: Inside Body", UVM_LOW);
+    // Create a sequence item (req1) before using it
+    req1 = seq_item::type_id::create("req1");  
+    // Use the `uvm_do` macro to execute the sequence
+    `uvm_do(req1);  // Correct usage of the macro
+  endtask
+endclass
+
+//*sequencer
+class sequencer extends uvm_sequencer#(seq_item);
+  `uvm_component_utils(sequencer)
+  function new(string name="sequence",uvm_component parent=null);
+    super.new(name,parent);
+  endfunction
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+  endfunction
+endclass
+
+//*driver    
+class driver extends uvm_driver#(seq_item);
+  virtual notif vif;  // Declare the virtual interface
+  seq_item reg1;      // Declare reg1 as an instance of seq_item
+
+  `uvm_component_utils(driver)
+
+  function new(string name = "driver", uvm_component parent = null);
+    super.new(name, parent);
+  endfunction
+
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    if (!uvm_config_db#(virtual notif)::get(this, "", "vif", vif)) begin
+      `uvm_fatal(get_type_name(), "virtual interface is not set on the top level");
+    end
+  endfunction
+
+  task run_phase(uvm_phase phase);
+    forever begin
+      seq_item_port.get_next_item(reg1);  // Fetch the next sequence item (reg1)
+      `uvm_info(get_type_name(), $sformatf("in = %0d", reg1.in), UVM_LOW);  // Corrected to $sformatf
+      vif.in <= reg1.in;  // Drive the interface signal
+      seq_item_port.item_done();  // Indicate to the sequencer that the item is done
+      #1ns;
+    end
+  endtask
+endclass
+
+//*Monitor
+class monitor extends uvm_monitor;
+   virtual notif vif;
+  uvm_analysis_port#(seq_item) item_collect_port;
+  seq_item mon_item;
+   `uvm_component_utils(monitor)
+  function new(string name="monitor",uvm_component parent = null);
+    super.new(name,parent);
+    item_collect_port=new("item_collect_port", this);
+    mon_item = new();  
+  endfunction
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    if(!uvm_config_db#(virtual notif)::get(this,"","vif",vif))
+      begin
+        `uvm_fatal(get_type_name(),"virtual interface is not set on the top level");
+      end
+  endfunction
+  task run_phase(uvm_phase phase);
+    forever begin
+      mon_item.in <= vif.in;
+      `uvm_info(get_type_name, $sformatf("in = %0d",mon_item.in),UVM_LOW);
+       mon_item.out <= vif.out;
+      item_collect_port.write(mon_item);
+      #1ns;
+    end
+  endtask
+endclass
+
+//*Agent
+class agent extends uvm_agent;
+  `uvm_component_utils(agent);
+  
+  sequencer seqr;
+  driver drv;
+  monitor mon;
+  
+  function new(string name="agent",uvm_component parent=null);
+    super.new(name,parent);
+  endfunction
+  
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    if(get_is_active == UVM_ACTIVE)
+      begin
+        seqr=sequencer::type_id::create("seqr", this);
+        drv=driver::type_id::create("drv", this);
+      end
+    
+    mon=monitor::type_id::create("mon", this);
+  endfunction
+  function void connect_phase(uvm_phase phase);
+ //   super.connect_phase(uvm_phase phase);
+      if(get_is_active == UVM_ACTIVE)
+      begin
+    drv.seq_item_port.connect(seqr.seq_item_export);
+      end
+    endfunction
+endclass
+
+//*Scoreboard
+class scoreboard extends uvm_scoreboard;
+   uvm_analysis_imp#(seq_item,scoreboard)item_collect_export;
+  `uvm_component_utils(scoreboard)
+  function new(string name="scoreboard",uvm_component parent = null);
+    super.new(name,parent);
+    item_collect_export=new("item_collect_export", this);
+  endfunction
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+  endfunction
+  function void write(seq_item reg1);
+    $display("-------------------------------------------------------------");
+    
+    if(reg1.in==~reg1.out)
+      begin
+        `uvm_info(get_type_name() ,$sformatf("MATCH in=%0d, out=%0d",reg1.in,reg1.out),UVM_LOW);
+      end
+    else
+      `uvm_info(get_type_name(), $sformatf("NO MATCH in=%0d, out=%0d",reg1.in,reg1.out),UVM_LOW);
+      
+      $display("-------------------------------------------------------------");
+  endfunction
+endclass
+
+//*environment
+class env extends uvm_env;
+  `uvm_component_utils(env)
+  agent agt;
+  scoreboard sb;
+  function new(string name = "env", uvm_component parent=null);
+    super.new(name,parent);
+  endfunction
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    agt = agent::type_id::create("agt", this);
+    sb = scoreboard::type_id::create("sb" ,this);
+  endfunction
+  
+  function void connect_phase(uvm_phase phase) ;
+ //   super.connect_phase(phase);
+    agt.mon.item_collect_port.connect(sb.item_collect_export);
+  endfunction
+endclass
+
+//*testblock(here we have all the verification components in which design will be instantiated later)
+`include "package.sv"
+class base_test extends uvm_test;
+    env env_o;
+   base_seq bseq;
+  `uvm_component_utils(base_test)
+  
+  function new(string name="base_test",uvm_component parent = null);
+    super.new(name, parent);
+  endfunction
+  
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    env_o=env::type_id::create("env_o", this);
+  endfunction
+  
+  task run_phase(uvm_phase phase);
+      phase.raise_objection(this);
+    bseq = base_seq::type_id::create("bseq");
+      
+      repeat(5)
+        begin
+          #5;
+          bseq.start(env_o.agt.seqr);
+          end
+          phase.drop_objection(this);
+      `uvm_info(get_type_name,"END OF THE TESTCASE",UVM_LOW);      
+      endtask
+  
+      endclass
+      
+//*package
+
+`include "seq_item.sv"
+`include "base_seq.sv"
+`include "sequencer.sv"
+`include "driver.sv"
+`include "monitor.sv"
+`include "scoreboard.sv"
+`include "agent.sv"
+`include "environment.sv"
+
+//*Testbench
+`include "uvm_macros.svh"
+import uvm_pkg::*; 
+
+`include "interface.sv" 
+`include "base_test.sv"
+
+module tb_top;
+  notif vif();
+  notg DUT(.in(vif.in),.out(vif.out));
+  initial
+    begin
+      uvm_config_db#(virtual notif)::set(uvm_root::get(),"*","vif",vif);
+    end
+  initial
+    begin
+      run_test("base_test");
+    end
+endmodule
+
