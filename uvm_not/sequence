@@ -1,0 +1,21 @@
+class base_seq extends uvm_sequence#(seq_item);
+  seq_item req1;  // Declare the sequence item (req1)
+
+  `uvm_object_utils(base_seq)
+
+  function new(string name = "seq");
+    super.new(name);
+  endfunction
+
+  task body();
+    `uvm_info(get_type_name(), "base seq: Inside Body", UVM_LOW);
+
+    // Create a sequence item (req1) before using it
+    req1 = seq_item::type_id::create("req1");  
+
+    // Use the `uvm_do` macro to execute the sequence
+    `uvm_do(req1);  // Correct usage of the macro
+   
+  endtask
+
+endclass
